@@ -53,12 +53,34 @@ async function init() {
   // Sidebar
   await loadNotebooks();
 
-  // Paste handler
+  // Paste handler — read ALL clipboard data synchronously before any await
   document.addEventListener('paste', async (e) => {
-    const text = e.clipboardData?.getData('text/plain') ?? '';
-    if (text) {
-      const handled = await embedMgr.handlePaste(text);
-      if (handled) return;
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
+
+    // Binary image: items (Chrome/Firefox 87+) or files (Linux fallback)
+    const imageItem = [...(e.clipboardData?.items ?? [])].find(i => i.type.startsWith('image/'));
+    const binaryFile = imageItem?.getAsFile()
+      ?? [...(e.clipboardData?.files ?? [])].find(f => f.type.startsWith('image/'))
+      ?? null;
+
+    // Firefox "Copy Image" may embed the image as a data URL inside text/html
+    const htmlSrc = binaryFile ? null
+      : (e.clipboardData?.getData('text/html') ?? '').match(/<img[^>]+\bsrc="(data:image\/[^"]+)"/i)?.[1] ?? null;
+
+    const text = (binaryFile || htmlSrc) ? '' : (e.clipboardData?.getData('text/plain') ?? '');
+
+    // Handle asynchronously
+    if (binaryFile) {
+      e.preventDefault();
+      try { await embedMgr.handleImagePaste(binaryFile); } catch (err) { console.error('Image paste failed:', err); }
+    } else if (htmlSrc) {
+      e.preventDefault();
+      try {
+        const blob = await (await fetch(htmlSrc)).blob();
+        await embedMgr.handleImagePaste(new File([blob], 'clipboard', { type: blob.type }));
+      } catch (err) { console.error('Image paste (HTML) failed:', err); }
+    } else if (text) {
+      await embedMgr.handlePaste(text);
     }
   });
 

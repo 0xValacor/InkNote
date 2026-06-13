@@ -57,6 +57,12 @@ export class EmbedManager {
     const cx = (rect.width / 2 - this.engine.tx) / this.engine.scale;
     const cy = (rect.height / 2 - this.engine.ty) / this.engine.scale;
 
+    // Direct image URL — skip link preview
+    if (/\.(jpe?g|png|gif|webp|svg|bmp|avif|ico)(\?[^#]*)?$/i.test(trimmed)) {
+      this._placeImageEmbed(trimmed);
+      return true;
+    }
+
     const preview = await getLinkPreview(trimmed);
 
     let embed;
@@ -75,8 +81,28 @@ export class EmbedManager {
       };
     }
 
+    this.engine.setTool('pan');
     this.engine.addEmbed(embed);
     return true;
+  }
+
+  async handleImagePaste(file) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    this._placeImageEmbed(dataUrl);
+  }
+
+  _placeImageEmbed(url) {
+    const rect = this.engine.container.getBoundingClientRect();
+    const cx = (rect.width / 2 - this.engine.tx) / this.engine.scale;
+    const cy = (rect.height / 2 - this.engine.ty) / this.engine.scale;
+    const embed = { id: generateId(), type: 'image', url, x: cx, y: cy, _cx: cx, _cy: cy };
+    this.engine.setTool('pan');
+    this.engine.addEmbed(embed);
   }
 
   setInteractive(enabled) {
@@ -89,6 +115,7 @@ export class EmbedManager {
     if (embed.type === 'text')   { this._createTextEl(embed);   return; }
     if (embed.type === 'sticky') { this._createStickyEl(embed); return; }
     if (embed.type === 'code')   { this._createCodeEl(embed);   return; }
+    if (embed.type === 'image')  { this._createImageEl(embed);  return; }
 
     const el = document.createElement('div');
     el.className = 'embed-card';
@@ -113,6 +140,37 @@ export class EmbedManager {
       el.style.height = 'auto';
       el.innerHTML = this._linkCardHTML(embed);
       el.querySelector('a')?.addEventListener('click', e => e.stopPropagation());
+
+      const rh = document.createElement('div');
+      rh.className = 'embed-resize-handle';
+      rh.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#6366f1;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);';
+      rh.addEventListener('pointerenter', () => { rh.style.opacity = '1'; });
+      rh.addEventListener('pointerleave', () => { rh.style.opacity = '0.7'; });
+      rh.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        e.stopPropagation(); e.preventDefault();
+        const pid = e.pointerId, rsX = e.clientX, rsY = e.clientY;
+        const rsW = el.offsetWidth, rsH = el.offsetHeight;
+        el.style.height = rsH + 'px';
+        const onMove = ev => {
+          if (ev.pointerId !== pid) return;
+          const newW = Math.max(180, rsW + (ev.clientX - rsX) / this.engine.scale);
+          const newH = Math.max(80,  rsH + (ev.clientY - rsY) / this.engine.scale);
+          el.style.width  = newW + 'px';
+          el.style.height = newH + 'px';
+        };
+        const onEnd = ev => {
+          if (ev.pointerId !== pid) return;
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup',   onEnd);
+          document.removeEventListener('pointercancel', onEnd);
+          this.engine.updateEmbedSize(embed.id, el.offsetWidth, el.offsetHeight);
+        };
+        document.addEventListener('pointermove',   onMove);
+        document.addEventListener('pointerup',     onEnd);
+        document.addEventListener('pointercancel', onEnd);
+      });
+      el.appendChild(rh);
     }
 
     el.appendChild(closeBtn);
@@ -325,6 +383,96 @@ export class EmbedManager {
         textarea.focus();
       });
     }
+  }
+
+  _createImageEl(embed) {
+    const el = document.createElement('div');
+    el.className = 'embed-card embed-image';
+    el.dataset.id = embed.id;
+    el.style.left = embed.x + 'px';
+    el.style.top  = embed.y + 'px';
+    if (embed.width)  el.style.width  = embed.width  + 'px';
+    if (embed.height) el.style.height = embed.height + 'px';
+
+    const img = document.createElement('img');
+    img.className = 'embed-image-img';
+    img.draggable = false;
+    img.alt = '';
+
+    let naturalAR = (embed.width && embed.height) ? embed.height / embed.width : null;
+
+    img.addEventListener('load', () => {
+      if (!naturalAR) naturalAR = img.naturalHeight / img.naturalWidth;
+
+      if ('_cx' in embed) {
+        // Fit within 80 % of the visible canvas so the resize handle stays on-screen
+        const maxW = (this.engine.container.clientWidth  * 0.8) / this.engine.scale;
+        const maxH = (this.engine.container.clientHeight * 0.8) / this.engine.scale;
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > maxW) { h = Math.round(h * maxW / w); w = Math.round(maxW); }
+        if (h > maxH) { w = Math.round(w * maxH / h); h = Math.round(maxH); }
+
+        const cx = embed._cx, cy = embed._cy;
+        delete embed._cx; delete embed._cy;
+        embed.x = cx - w / 2;
+        embed.y = cy - h / 2;
+        el.style.width  = w + 'px';
+        el.style.height = h + 'px';
+        el.style.left   = embed.x + 'px';
+        el.style.top    = embed.y + 'px';
+        this.engine.updateEmbedSize(embed.id, w, h);
+      } else if (!embed.width) {
+        const w = img.naturalWidth, h = img.naturalHeight;
+        el.style.width  = w + 'px';
+        el.style.height = h + 'px';
+        this.engine.updateEmbedSize(embed.id, w, h);
+      }
+    });
+
+    img.src = embed.url;
+
+    // Corner resize handle (bottom-right) — uses document-level listeners for reliability
+    const resizeHandle = document.createElement('div');
+    resizeHandle.className = 'embed-resize-handle';
+    resizeHandle.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#6366f1;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);';
+    resizeHandle.addEventListener('pointerenter', () => { resizeHandle.style.opacity = '1'; });
+    resizeHandle.addEventListener('pointerleave', () => { resizeHandle.style.opacity = '0.7'; });
+
+    resizeHandle.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const pid = e.pointerId;
+      const rsX = e.clientX, rsY = e.clientY;
+      const rsW = el.offsetWidth,  rsH = el.offsetHeight;
+
+      const onMove = ev => {
+        if (ev.pointerId !== pid) return;
+        const newW = Math.max(40, rsW + (ev.clientX - rsX) / this.engine.scale);
+        const newH = naturalAR ? Math.round(newW * naturalAR) : Math.max(40, rsH + (ev.clientY - rsY) / this.engine.scale);
+        el.style.width  = newW + 'px';
+        el.style.height = newH + 'px';
+        img.style.width  = newW + 'px';
+        img.style.height = newH + 'px';
+      };
+      const onEnd = ev => {
+        if (ev.pointerId !== pid) return;
+        document.removeEventListener('pointermove',   onMove);
+        document.removeEventListener('pointerup',     onEnd);
+        document.removeEventListener('pointercancel', onEnd);
+        this.engine.updateEmbedSize(embed.id, el.offsetWidth, el.offsetHeight);
+      };
+      document.addEventListener('pointermove',   onMove);
+      document.addEventListener('pointerup',     onEnd);
+      document.addEventListener('pointercancel', onEnd);
+    });
+
+    el.appendChild(img);
+    el.appendChild(_makeClose(() => this.engine.removeEmbed(embed.id)));
+    el.appendChild(resizeHandle);
+    this._makeDraggable(el, embed);
+    this.layer.appendChild(el);
+    this.elements.set(embed.id, el);
   }
 
   _linkCardHTML(embed) {

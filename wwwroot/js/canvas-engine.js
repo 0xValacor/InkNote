@@ -42,7 +42,13 @@ export class CanvasEngine {
   // ─── Serialization ───────────────────────────────────────────────────────
 
   getData() {
-    return { version: 1, strokes: this.strokes, embeds: this.embeds };
+    // Strip ephemeral _* properties (e.g. _cx/_cy used for post-load centering)
+    const embeds = this.embeds.map(e => {
+      const out = {};
+      for (const k of Object.keys(e)) { if (!k.startsWith('_')) out[k] = e[k]; }
+      return out;
+    });
+    return { version: 1, strokes: this.strokes, embeds };
   }
 
   loadData(data) {
@@ -130,6 +136,12 @@ export class CanvasEngine {
   updateEmbedColor(id, color) {
     const embed = this.embeds.find(e => e.id === id);
     if (embed) embed.color = color;
+    this._notifyChange();
+  }
+
+  updateEmbedSize(id, width, height) {
+    const embed = this.embeds.find(e => e.id === id);
+    if (embed) { embed.width = width; embed.height = height; }
     this._notifyChange();
   }
 
@@ -398,6 +410,9 @@ export class CanvasEngine {
 
   _onDown(e) {
     if (this.embedsLayer.contains(e.target)) return;
+    // Blur any active textarea/input so Ctrl+V paste fires on the document, not the text field
+    const active = document.activeElement;
+    if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) active.blur();
     e.preventDefault();
     // Palm rejection: ignore finger touches while a stylus is active
     if (e.pointerType === 'touch' && [...this.activePointers.values()].some(p => p.type === 'pen')) return;
