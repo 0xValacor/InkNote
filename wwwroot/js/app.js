@@ -161,6 +161,9 @@ function setupToolbar() {
   document.getElementById('btn-sidebar').addEventListener('click', () => {
     document.getElementById('sidebar').classList.toggle('collapsed');
   });
+  document.getElementById('sidebar').addEventListener('transitionend', () => {
+    engine._resize();
+  });
 
   // Zoom controls
   document.getElementById('btn-zoom-in').addEventListener('click', () => engine.zoomAt(1.2, window.innerWidth / 2, window.innerHeight / 2));

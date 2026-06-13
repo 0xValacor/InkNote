@@ -348,7 +348,8 @@ export class CanvasEngine {
 
     window.addEventListener('keydown', e => this._onKey(e, true));
     window.addEventListener('keyup', e => this._onKey(e, false));
-    window.addEventListener('resize', () => this._resize());
+    this._ro = new ResizeObserver(() => this._resize());
+    this._ro.observe(this.container);
   }
 
   _touchSynth(t, button) {
@@ -581,9 +582,9 @@ export class CanvasEngine {
   }
 
   _resize() {
-    const rect = this.container.getBoundingClientRect();
-    const w = rect.width || window.innerWidth;
-    const h = rect.height || window.innerHeight;
+    const w = this.committed.clientWidth || this.container.clientWidth;
+    const h = this.committed.clientHeight || this.container.clientHeight;
+    if (!w || !h) return;
     this.committed.width = w;
     this.committed.height = h;
     this.active.width = w;
