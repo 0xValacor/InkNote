@@ -11,6 +11,8 @@ let activeNotebookId = null, activePageId = null;
 let isDirty = false;
 const SAVE_INTERVAL_MS = 2 * 60 * 1000;
 let saveStatus = 'saved'; // 'saved' | 'saving' | 'unsaved'
+let isSwitching = false;
+let pendingSwitch = null; // latest-wins navigation queue
 
 const PRESET_COLORS = [
   '#ffffff', '#c0c0c0', '#808080', '#ff6b6b', '#ff9f43',
@@ -230,35 +232,84 @@ async function loadNotebooks() {
   }
 }
 
-async function selectNotebook(nbId) {
-  activeNotebookId = nbId;
-  pages = await api.getPages(nbId);
-  renderSidebar();
+function selectNotebook(nbId) {
+  if (activeNotebookId === nbId) return;
+  pendingSwitch = { type: 'notebook', id: nbId };
+  _drainSwitchQueue();
+}
 
-  if (pages.length > 0) {
-    await selectPage(pages[0].id);
+function selectPage(pageId) {
+  if (activePageId === pageId) return;
+  pendingSwitch = { type: 'page', id: pageId };
+  _drainSwitchQueue();
+}
+
+async function _drainSwitchQueue() {
+  if (isSwitching) return;
+  isSwitching = true;
+  try {
+    while (pendingSwitch) {
+      const queued = pendingSwitch;
+      pendingSwitch = null;
+      try {
+        if (queued.type === 'notebook') {
+          if (queued.id !== activeNotebookId) await _doSelectNotebook(queued.id);
+          // Discard any page switch queued from the old notebook context
+          if (pendingSwitch?.type === 'page' && !pages.some(p => p.id === pendingSwitch.id))
+            pendingSwitch = null;
+        } else {
+          // Only switch if the page still belongs to the current notebook
+          if (queued.id !== activePageId && pages.some(p => p.id === queued.id))
+            await _doSelectPage(queued.id);
+        }
+      } catch (e) { console.error('Navigation error', e); }
+    }
+  } finally {
+    isSwitching = false;
   }
 }
 
-async function selectPage(pageId) {
-  if (activePageId === pageId) return;
-  await saveCurrentPage();
-  activePageId = pageId;
-
-  const result = await api.getDrawing(pageId);
-  if (result.data) {
-    try {
-      const data = await api.decompressData(result.data);
-      engine.loadData(data);
-    } catch {
-      engine.loadData({ strokes: [], embeds: [] });
-    }
+async function _doSelectNotebook(nbId) {
+  if (isDirty) await saveCurrentPage();
+  activeNotebookId = nbId;
+  activePageId = null;
+  pages = await api.getPages(nbId);
+  if (pages.length > 0) {
+    await _loadPage(pages[0].id);
   } else {
     engine.loadData({ strokes: [], embeds: [] });
+    isDirty = false;
+    setSaveStatus('saved');
+    renderSidebar();
   }
+}
 
-  renderSidebar();
+async function _doSelectPage(pageId) {
+  if (isDirty) await saveCurrentPage();
+  await _loadPage(pageId);
+}
+
+async function _loadPage(pageId) {
+  activePageId = pageId;
+  try {
+    const result = await api.getDrawing(pageId);
+    if (result.data) {
+      try {
+        const data = await api.decompressData(result.data);
+        engine.loadData(data);
+      } catch {
+        engine.loadData({ strokes: [], embeds: [] });
+      }
+    } else {
+      engine.loadData({ strokes: [], embeds: [] });
+    }
+  } catch (e) {
+    console.error('Failed to load page', e);
+    engine.loadData({ strokes: [], embeds: [] });
+  }
+  isDirty = false;
   setSaveStatus('saved');
+  renderSidebar();
 }
 
 function renderSidebar() {
@@ -316,10 +367,11 @@ function renderSidebar() {
           await api.deletePage(pg.id);
           pages = pages.filter(p => p.id !== pg.id);
           if (activePageId === pg.id) {
-            activePageId = null;
+            activePageId = null; // cleared so saveCurrentPage is a no-op inside selectPage
             await selectPage(pages[0].id);
+          } else {
+            renderSidebar();
           }
-          renderSidebar();
         });
         pgEl.appendChild(pgDel);
         pageList.appendChild(pgEl);
@@ -377,11 +429,15 @@ function markDirty() {
 
 async function saveCurrentPage() {
   if (!activePageId) return;
+  // Capture both synchronously before any await — activePageId and canvas
+  // data must be snapshotted now, because _loadPage() can change them while
+  // compression is in flight.
+  const pageId = activePageId;
+  const data = engine.getData();
   try {
     setSaveStatus('saving');
-    const data = engine.getData();
     const compressed = await api.compressData(data);
-    await api.saveDrawing(activePageId, compressed);
+    await api.saveDrawing(pageId, compressed);
     isDirty = false;
     setSaveStatus('saved');
   } catch (e) {
