@@ -8,7 +8,8 @@ import * as api from './api.js';
 let engine, embedMgr, colorPicker;
 let notebooks = [], pages = [];
 let activeNotebookId = null, activePageId = null;
-let saveTimer = null;
+let isDirty = false;
+const SAVE_INTERVAL_MS = 2 * 60 * 1000;
 let saveStatus = 'saved'; // 'saved' | 'saving' | 'unsaved'
 
 const PRESET_COLORS = [
@@ -27,7 +28,7 @@ async function init() {
   engine = new CanvasEngine(container, committed, active, embedsLayer);
   embedMgr = new EmbedManager(engine, embedsLayer);
 
-  engine.onChange = () => scheduleSave();
+  engine.onChange = () => markDirty();
   engine.onToolChange = (tool) => {
     updateToolbar(tool);
     embedMgr.setInteractive(tool === 'pan');
@@ -49,6 +50,8 @@ async function init() {
 
   // Toolbar events
   setupToolbar();
+
+  setInterval(() => { if (isDirty) saveCurrentPage(); }, SAVE_INTERVAL_MS);
 
   // Sidebar
   await loadNotebooks();
@@ -366,10 +369,9 @@ function inlineRename(el, current, onSave) {
 
 // ─── Save ─────────────────────────────────────────────────────────────────────
 
-function scheduleSave() {
+function markDirty() {
+  isDirty = true;
   setSaveStatus('unsaved');
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => saveCurrentPage(), 2000);
   updateUndoRedo();
 }
 
@@ -380,6 +382,7 @@ async function saveCurrentPage() {
     const data = engine.getData();
     const compressed = await api.compressData(data);
     await api.saveDrawing(activePageId, compressed);
+    isDirty = false;
     setSaveStatus('saved');
   } catch (e) {
     console.error('Save failed', e);

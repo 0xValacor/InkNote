@@ -186,6 +186,7 @@ export class EmbedManager {
     el.style.left = embed.x + 'px';
     el.style.top = embed.y + 'px';
     el.style.width = (embed.width || 240) + 'px';
+    if (embed.height) el.style.height = embed.height + 'px';
 
     const header = document.createElement('div');
     header.className = 'embed-text-header';
@@ -204,17 +205,57 @@ export class EmbedManager {
     textarea.value = embed.content || '';
     textarea.addEventListener('pointerdown', e => e.stopPropagation());
     textarea.addEventListener('input', () => {
-      _autoResize(textarea);
+      if (!embed.height) _autoResize(textarea);
       embed.content = textarea.value;
       this.engine.updateEmbedContent(embed.id, embed.content);
     });
     el.appendChild(textarea);
 
+    // Resize handle — same pattern as link/image handles
+    const rh = document.createElement('div');
+    rh.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#6366f1;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);touch-action:none;';
+    rh.addEventListener('pointerenter', () => { rh.style.opacity = '1'; });
+    rh.addEventListener('pointerleave', () => { rh.style.opacity = '0.7'; });
+    rh.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      e.stopPropagation(); e.preventDefault();
+      rh.setPointerCapture(e.pointerId);
+      const rsX = e.clientX, rsY = e.clientY;
+      const rsW = el.offsetWidth, rsH = el.offsetHeight;
+      const onMove = ev => {
+        const newW = Math.max(140, rsW + (ev.clientX - rsX) / this.engine.scale);
+        const newH = Math.max(80,  rsH + (ev.clientY - rsY) / this.engine.scale);
+        el.style.width  = newW + 'px';
+        el.style.height = newH + 'px';
+        embed.height = newH;
+        textarea.style.height   = Math.max(40, newH - header.offsetHeight) + 'px';
+        textarea.style.overflow = 'auto';
+      };
+      const onEnd = () => {
+        rh.removeEventListener('pointermove',   onMove);
+        rh.removeEventListener('pointerup',     onEnd);
+        rh.removeEventListener('pointercancel', onEnd);
+        this.engine.updateEmbedSize(embed.id, el.offsetWidth, el.offsetHeight);
+      };
+      rh.addEventListener('pointermove',   onMove);
+      rh.addEventListener('pointerup',     onEnd);
+      rh.addEventListener('pointercancel', onEnd);
+    });
+    el.appendChild(rh);
+
     this._makeDraggable(el, embed, header);
     this.layer.appendChild(el);
     this.elements.set(embed.id, el);
 
-    requestAnimationFrame(() => _autoResize(textarea));
+    if (embed.height) {
+      requestAnimationFrame(() => {
+        textarea.style.height   = Math.max(40, embed.height - header.offsetHeight) + 'px';
+        textarea.style.overflow = 'auto';
+      });
+    } else {
+      requestAnimationFrame(() => _autoResize(textarea));
+    }
+
     if (this.focusPendingId === embed.id) {
       this.focusPendingId = null;
       requestAnimationFrame(() => textarea.focus());
