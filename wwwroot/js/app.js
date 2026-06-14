@@ -92,6 +92,7 @@ async function init() {
   // Keyboard: zoom shortcuts
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveCurrentPage(); }
     if (e.key === '+' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); engine.zoomAt(1.15, window.innerWidth / 2, window.innerHeight / 2); }
     if (e.key === '-' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); engine.zoomAt(0.87, window.innerWidth / 2, window.innerHeight / 2); }
   });
@@ -135,6 +136,7 @@ function setupToolbar() {
 
   document.getElementById('btn-undo').addEventListener('click', () => { engine.undo(); updateUndoRedo(); });
   document.getElementById('btn-redo').addEventListener('click', () => { engine.redo(); updateUndoRedo(); });
+  document.getElementById('btn-save').addEventListener('click', () => saveCurrentPage());
 
   // Color swatch opens picker
   document.getElementById('color-swatch-btn').addEventListener('click', (e) => {
