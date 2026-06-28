@@ -2,17 +2,21 @@ import { CanvasEngine } from './canvas-engine.js';
 import { EmbedManager } from './embeds.js';
 import { ColorPicker } from './color-picker.js';
 import * as api from './api.js';
+import * as invApi from './osint-api.js';
+import { MindMap } from './mindmap.js';
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
-let engine, embedMgr, colorPicker;
+let engine, embedMgr, colorPicker, mindMap;
 let notebooks = [], pages = [];
+let investigations = [];
 let activeNotebookId = null, activePageId = null;
+let activeInvestigationId = null;
 let isDirty = false;
 const SAVE_INTERVAL_MS = 2 * 60 * 1000;
-let saveStatus = 'saved'; // 'saved' | 'saving' | 'unsaved'
+let saveStatus = 'saved';
 let isSwitching = false;
-let pendingSwitch = null; // latest-wins navigation queue
+let pendingSwitch = null;
 
 const PRESET_COLORS = [
   '#ffffff', '#c0c0c0', '#808080', '#ff6b6b', '#ff9f43',
@@ -47,34 +51,39 @@ async function init() {
   colorPicker.setColor('#ffffff', 1.0);
   engine.color = '#ffffff';
 
-  // Preset colors
   buildPresets();
-
-  // Toolbar events
   setupToolbar();
 
   setInterval(() => { if (isDirty) saveCurrentPage(); }, SAVE_INTERVAL_MS);
 
-  // Sidebar
-  await loadNotebooks();
+  // Mindmap
+  mindMap = new MindMap(
+    document.getElementById('mindmap-graph'),
+    document.getElementById('mindmap-detail'),
+    document.getElementById('mindmap-osint-panel'),
+    document.getElementById('mindmap-context-menu')
+  );
+  mindMap.onGraphChange = () => markDirty();
+  setupMindmapToolbar();
+  setupSplitter();
 
-  // Paste handler — read ALL clipboard data synchronously before any await
+  // Load both sections
+  await Promise.all([loadInvestigations(), loadNotebooks()]);
+
+  // Paste handler
   document.addEventListener('paste', async (e) => {
     if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
 
-    // Binary image: items (Chrome/Firefox 87+) or files (Linux fallback)
     const imageItem = [...(e.clipboardData?.items ?? [])].find(i => i.type.startsWith('image/'));
     const binaryFile = imageItem?.getAsFile()
       ?? [...(e.clipboardData?.files ?? [])].find(f => f.type.startsWith('image/'))
       ?? null;
 
-    // Firefox "Copy Image" may embed the image as a data URL inside text/html
     const htmlSrc = binaryFile ? null
       : (e.clipboardData?.getData('text/html') ?? '').match(/<img[^>]+\bsrc="(data:image\/[^"]+)"/i)?.[1] ?? null;
 
     const text = (binaryFile || htmlSrc) ? '' : (e.clipboardData?.getData('text/plain') ?? '');
 
-    // Handle asynchronously
     if (binaryFile) {
       e.preventDefault();
       try { await embedMgr.handleImagePaste(binaryFile); } catch (err) { console.error('Image paste failed:', err); }
@@ -89,7 +98,6 @@ async function init() {
     }
   });
 
-  // Keyboard: zoom shortcuts
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveCurrentPage(); }
@@ -97,7 +105,6 @@ async function init() {
     if (e.key === '-' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); engine.zoomAt(0.87, window.innerWidth / 2, window.innerHeight / 2); }
   });
 
-  // Close panels on outside click/tap
   document.addEventListener('pointerdown', e => {
     if (!e.target.closest('#color-picker-popup') && !e.target.closest('#color-swatch-btn')) {
       document.getElementById('color-picker-popup').classList.remove('visible');
@@ -113,7 +120,6 @@ async function init() {
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
 
 function setupToolbar() {
-  // Tool buttons
   document.getElementById('btn-pen').addEventListener('click', () => { engine.penType = 'pen'; engine.setTool('pen'); });
   document.getElementById('btn-pencil').addEventListener('click', () => { engine.penType = 'pencil'; engine.setTool('pen'); });
   document.getElementById('btn-brush').addEventListener('click', () => { engine.penType = 'brush'; engine.setTool('pen'); });
@@ -124,27 +130,19 @@ function setupToolbar() {
   });
   document.getElementById('btn-pan').addEventListener('click', () => engine.setTool('pan'));
 
-  document.getElementById('btn-text').addEventListener('click', () => _insertEmbed({
-    type: 'text', content: '', width: 240
-  }));
-  document.getElementById('btn-sticky').addEventListener('click', () => _insertEmbed({
-    type: 'sticky', content: '', color: '#fef08a', width: 200, height: 200
-  }));
-  document.getElementById('btn-code').addEventListener('click', () => _insertEmbed({
-    type: 'code', content: '', language: 'auto', width: 460, height: 280
-  }));
+  document.getElementById('btn-text').addEventListener('click', () => _insertEmbed({ type: 'text', content: '', width: 240 }));
+  document.getElementById('btn-sticky').addEventListener('click', () => _insertEmbed({ type: 'sticky', content: '', color: '#fef08a', width: 200, height: 200 }));
+  document.getElementById('btn-code').addEventListener('click', () => _insertEmbed({ type: 'code', content: '', language: 'auto', width: 460, height: 280 }));
 
   document.getElementById('btn-undo').addEventListener('click', () => { engine.undo(); updateUndoRedo(); });
   document.getElementById('btn-redo').addEventListener('click', () => { engine.redo(); updateUndoRedo(); });
   document.getElementById('btn-save').addEventListener('click', () => saveCurrentPage());
 
-  // Color swatch opens picker
   document.getElementById('color-swatch-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     document.getElementById('color-picker-popup').classList.toggle('visible');
   });
 
-  // Brush size popup
   document.getElementById('brush-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     const popup = document.getElementById('brush-popup');
@@ -164,7 +162,6 @@ function setupToolbar() {
     document.getElementById('eraser-val').textContent = engine.eraserSize;
   });
 
-  // Toggle sidebar
   document.getElementById('btn-sidebar').addEventListener('click', () => {
     document.getElementById('sidebar').classList.toggle('collapsed');
   });
@@ -172,10 +169,51 @@ function setupToolbar() {
     engine._resize();
   });
 
-  // Zoom controls
   document.getElementById('btn-zoom-in').addEventListener('click', () => engine.zoomAt(1.2, window.innerWidth / 2, window.innerHeight / 2));
   document.getElementById('btn-zoom-out').addEventListener('click', () => engine.zoomAt(0.83, window.innerWidth / 2, window.innerHeight / 2));
   document.getElementById('btn-zoom-reset').addEventListener('click', () => engine.resetView());
+}
+
+function setupMindmapToolbar() {
+  document.querySelectorAll('.mm-add-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!activeInvestigationId) return;
+      const type = btn.dataset.type;
+      const label = prompt(`${type.charAt(0).toUpperCase() + type.slice(1)} value:`);
+      if (!label?.trim()) return;
+      const entity = await invApi.addEntity(activeInvestigationId, type, label.trim());
+      mindMap.addEntity(entity);
+      markDirty();
+    });
+  });
+
+  document.getElementById('mm-btn-layout').addEventListener('click', () => mindMap.runLayout());
+  document.getElementById('mm-btn-fit').addEventListener('click', () => mindMap.fit());
+}
+
+function setupSplitter() {
+  const splitter = document.getElementById('mindmap-splitter');
+  const mindmapPanel = document.getElementById('mindmap-panel');
+  const canvasContainer = document.getElementById('canvas-container');
+  let dragging = false, startX, startMW;
+
+  splitter.addEventListener('pointerdown', e => {
+    dragging = true;
+    startX = e.clientX;
+    startMW = mindmapPanel.offsetWidth;
+    splitter.classList.add('dragging');
+    splitter.setPointerCapture(e.pointerId);
+  });
+  splitter.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const newW = Math.max(260, Math.min(startMW + dx, window.innerWidth - 300));
+    mindmapPanel.style.flex = 'none';
+    mindmapPanel.style.width = newW + 'px';
+    engine._resize();
+  });
+  splitter.addEventListener('pointerup', () => { dragging = false; splitter.classList.remove('dragging'); });
+  splitter.addEventListener('pointercancel', () => { dragging = false; splitter.classList.remove('dragging'); });
 }
 
 function updateToolbar(tool) {
@@ -215,7 +253,111 @@ function buildPresets() {
   });
 }
 
-function updatePresets() { /* presets don't need to change */ }
+function updatePresets() { }
+
+// ─── Investigations sidebar ────────────────────────────────────────────────────
+
+async function loadInvestigations() {
+  investigations = await invApi.getInvestigations();
+  renderInvestigationList();
+}
+
+function renderInvestigationList() {
+  const list = document.getElementById('investigation-list');
+  list.innerHTML = '';
+
+  for (const inv of investigations) {
+    const el = document.createElement('div');
+    el.className = 'inv-item' + (inv.id === activeInvestigationId ? ' active' : '');
+
+    el.innerHTML = `<span class="inv-icon">🔍</span><span class="inv-name">${esc(inv.name)}</span>`;
+
+    const del = document.createElement('button');
+    del.className = 'inv-del';
+    del.title = 'Delete investigation';
+    del.innerHTML = '&times;';
+    del.addEventListener('click', async e => {
+      e.stopPropagation();
+      if (!confirm(`Delete investigation "${inv.name}"?`)) return;
+      await invApi.deleteInvestigation(inv.id);
+      if (activeInvestigationId === inv.id) closeInvestigation();
+      await loadInvestigations();
+    });
+    el.appendChild(del);
+
+    el.addEventListener('click', () => selectInvestigation(inv.id));
+    el.addEventListener('dblclick', () => {
+      const nameEl = el.querySelector('.inv-name');
+      inlineRename(nameEl, inv.name, async v => {
+        await invApi.renameInvestigation(inv.id, v);
+        inv.name = v;
+      });
+    });
+
+    list.appendChild(el);
+  }
+
+  document.getElementById('add-investigation-btn').onclick = async () => {
+    const name = prompt('Investigation name:', 'New Investigation');
+    if (!name?.trim()) return;
+    const inv = await invApi.createInvestigation(name.trim());
+    investigations.unshift(inv);
+    renderInvestigationList();
+    await selectInvestigation(inv.id);
+  };
+}
+
+async function selectInvestigation(id) {
+  if (activeInvestigationId === id) return;
+
+  // Save current page if dirty
+  if (isDirty) await saveCurrentPage();
+
+  activeInvestigationId = id;
+  activePageId = null;
+  activeNotebookId = null;
+
+  // Show split layout
+  document.getElementById('mindmap-panel').style.display = 'flex';
+  document.getElementById('mindmap-panel').style.flex = '1';
+  document.getElementById('mindmap-panel').style.width = '';
+  document.getElementById('mindmap-splitter').style.display = 'block';
+
+  // Load investigation graph
+  const detail = await invApi.getInvestigation(id);
+  mindMap.load(detail);
+
+  // Load investigation canvas drawing
+  try {
+    const result = await invApi.getInvestigationDrawing(id);
+    if (result.data) {
+      try {
+        const data = await api.decompressData(result.data);
+        engine.loadData(data);
+      } catch {
+        engine.loadData({ strokes: [], embeds: [] });
+      }
+    } else {
+      engine.loadData({ strokes: [], embeds: [] });
+    }
+  } catch {
+    engine.loadData({ strokes: [], embeds: [] });
+  }
+
+  isDirty = false;
+  setSaveStatus('saved');
+  renderInvestigationList();
+  renderSidebar(); // clear notebook selection highlight
+}
+
+function closeInvestigation() {
+  activeInvestigationId = null;
+  document.getElementById('mindmap-panel').style.display = 'none';
+  document.getElementById('mindmap-splitter').style.display = 'none';
+  engine.loadData({ strokes: [], embeds: [] });
+  isDirty = false;
+  setSaveStatus('saved');
+}
 
 // ─── Sidebar / Notebooks ──────────────────────────────────────────────────────
 
@@ -229,19 +371,33 @@ async function loadNotebooks() {
     renderSidebar();
   }
 
-  if (notebooks.length > 0) {
+  // Only auto-select a notebook page if no investigation is active
+  if (notebooks.length > 0 && !activeInvestigationId) {
     await selectNotebook(notebooks[0].id);
   }
 }
 
 function selectNotebook(nbId) {
   if (activeNotebookId === nbId) return;
+  // Deselect investigation when switching to notebook
+  if (activeInvestigationId) {
+    activeInvestigationId = null;
+    document.getElementById('mindmap-panel').style.display = 'none';
+    document.getElementById('mindmap-splitter').style.display = 'none';
+    renderInvestigationList();
+  }
   pendingSwitch = { type: 'notebook', id: nbId };
   _drainSwitchQueue();
 }
 
 function selectPage(pageId) {
   if (activePageId === pageId) return;
+  if (activeInvestigationId) {
+    activeInvestigationId = null;
+    document.getElementById('mindmap-panel').style.display = 'none';
+    document.getElementById('mindmap-splitter').style.display = 'none';
+    renderInvestigationList();
+  }
   pendingSwitch = { type: 'page', id: pageId };
   _drainSwitchQueue();
 }
@@ -256,11 +412,9 @@ async function _drainSwitchQueue() {
       try {
         if (queued.type === 'notebook') {
           if (queued.id !== activeNotebookId) await _doSelectNotebook(queued.id);
-          // Discard any page switch queued from the old notebook context
           if (pendingSwitch?.type === 'page' && !pages.some(p => p.id === pendingSwitch.id))
             pendingSwitch = null;
         } else {
-          // Only switch if the page still belongs to the current notebook
           if (queued.id !== activePageId && pages.some(p => p.id === queued.id))
             await _doSelectPage(queued.id);
         }
@@ -369,7 +523,7 @@ function renderSidebar() {
           await api.deletePage(pg.id);
           pages = pages.filter(p => p.id !== pg.id);
           if (activePageId === pg.id) {
-            activePageId = null; // cleared so saveCurrentPage is a no-op inside selectPage
+            activePageId = null;
             await selectPage(pages[0].id);
           } else {
             renderSidebar();
@@ -430,10 +584,24 @@ function markDirty() {
 }
 
 async function saveCurrentPage() {
+  // Save investigation canvas if in investigation mode
+  if (activeInvestigationId) {
+    const invId = activeInvestigationId;
+    const data = engine.getData();
+    try {
+      setSaveStatus('saving');
+      const compressed = await api.compressData(data);
+      await invApi.saveInvestigationDrawing(invId, compressed);
+      isDirty = false;
+      setSaveStatus('saved');
+    } catch (e) {
+      console.error('Save failed', e);
+      setSaveStatus('error');
+    }
+    return;
+  }
+
   if (!activePageId) return;
-  // Capture both synchronously before any await — activePageId and canvas
-  // data must be snapshotted now, because _loadPage() can change them while
-  // compression is in flight.
   const pageId = activePageId;
   const data = engine.getData();
   try {
@@ -456,7 +624,6 @@ function setSaveStatus(status) {
   el.textContent = { saved: 'Saved', saving: 'Saving...', unsaved: 'Unsaved', error: 'Save error' }[status] ?? status;
 }
 
-// Before unload, save
 window.addEventListener('beforeunload', (e) => {
   if (saveStatus === 'unsaved') {
     saveCurrentPage();

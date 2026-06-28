@@ -40,17 +40,45 @@ Drawing data (`Page.DrawingData`) is stored as a raw `byte[]` — the client gzi
 
 All JS lives in `wwwroot/js/` and is loaded as ES modules via `index.html`.
 
-- `app.js` — application shell: initializes subsystems, manages sidebar state (notebooks/pages list), schedules auto-saves (2 s debounce), and wires toolbar buttons to the engine.
-- `canvas-engine.js` (`CanvasEngine` class) — all drawing logic. Uses a two-canvas approach: `committed` (all finalized strokes) and `active` (current in-progress stroke). Handles pointer events, pinch-to-zoom gestures, pen/touch palm rejection, pan with spacebar or middle mouse, and undo/redo (stack of `{type, stroke|embed}` operations). Pen types: `pen`, `pencil`, `brush`, `marker`, `eraser`.
-- `embeds.js` (`EmbedManager` class) — manages link/YouTube embed cards as absolutely-positioned DOM overlays on top of the canvas. Paste a URL to trigger a preview fetch and place a card; cards are draggable and tracked in `engine.embeds[]` so they persist with the drawing data.
-- `api.js` — thin fetch wrappers for all REST endpoints plus `compressData`/`decompressData` using the browser's `CompressionStream` API (gzip).
+- `app.js` — application shell: initializes subsystems, manages sidebar state (notebooks/pages list), handles auto-save (2 min interval that fires when `isDirty`), manual save (Ctrl+S, save button), and `beforeunload` save. Wires toolbar buttons to the engine. Maintains a `saveStatus` indicator (`saved | saving | unsaved | error`).
+- `canvas-engine.js` (`CanvasEngine` class) — all drawing logic. Uses a two-canvas approach: `committed` (all finalized strokes) and `active` (current in-progress stroke). Handles pointer events, touch fallback for older browsers, pinch-to-zoom gestures, pen/touch palm rejection, pan with spacebar or middle mouse, and undo/redo (stack of `{type, stroke|embed}` operations). Pen types: `pen`, `pencil`, `brush`, `marker`, `eraser` (separate `eraserSize` property).
+- `embeds.js` (`EmbedManager` class) — manages embed cards as absolutely-positioned DOM overlays on top of the canvas. Six embed types: `text` (resizable text box), `sticky` (colored sticky note), `code` (syntax-highlighted code block via highlight.js), `image` (clipboard or URL), `link` (OG preview card), `youtube` (iframe embed). Paste a URL or image to add a card; cards are draggable, resizable, and tracked in `engine.embeds[]` so they persist with the drawing data.
+- `api.js` — thin fetch wrappers for all REST endpoints plus `compressData`/`decompressData` using the browser's `CompressionStream` API (gzip, with plain base64 fallback for older browsers) and `generateId()` (UUID v4).
 - `color-picker.js` — standalone color picker component.
+
+Third-party assets in `wwwroot/`:
+- `lib/highlight.min.js` + `css/hljs-dark.min.css` — highlight.js for code embed syntax highlighting.
 
 ### Data flow for saving
 
-`CanvasEngine.onChange` → `scheduleSave()` in `app.js` → debounce 2 s → `engine.getData()` returns `{version, strokes, embeds}` → `api.compressData()` (gzip → base64) → `PUT /api/pages/{id}/drawing` with `{compressedData}`.
+`CanvasEngine.onChange` → `markDirty()` in `app.js` (sets `isDirty = true`, status = `unsaved`) → either interval fires every 2 min if dirty, or user presses Ctrl+S / save button → `engine.getData()` returns `{version, strokes, embeds}` → `api.compressData()` (gzip → base64) → `PUT /api/pages/{id}/drawing` with `{compressedData}`.
 
 On load: `GET /api/pages/{id}/drawing` → base64 → `api.decompressData()` → `engine.loadData()`.
+
+Page/notebook navigation uses a latest-wins queue (`pendingSwitch` + `isSwitching` + `_drainSwitchQueue`) to serialize async switches and avoid race conditions.
+
+### Paste handling
+
+Paste events are handled in `app.js` and dispatched to `EmbedManager`:
+- Binary image in clipboard items → `handleImagePaste(file)`
+- `<img src="data:...">` in clipboard HTML (Firefox "Copy Image") → decoded and passed to `handleImagePaste`
+- Image URL (`.jpg`, `.png`, etc.) → placed as image embed directly, skipping link preview
+- Any other `https?://` URL → `getLinkPreview()` → youtube or link embed
+- Plain text / non-URL → ignored by embeds
+
+### Keyboard shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl/Cmd+S` | Manual save |
+| `Ctrl/Cmd +` / `-` | Zoom in / out |
+| `Ctrl/Cmd+0` | Reset view |
+| `Ctrl/Cmd+Z` | Undo |
+| `Ctrl/Cmd+Shift+Z` / `Ctrl+Y` | Redo |
+| `Space` (hold) | Temporary pan mode |
+| `Alt` (hold) | Temporary eraser |
+| `E` | Toggle eraser |
+| `B` | Switch to pen tool |
 
 ### Key constraints
 

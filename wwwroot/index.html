@@ -21,7 +21,7 @@
 
     <div class="tb-sep"></div>
 
-    <div class="tb-group">
+    <div class="tb-group" id="drawing-tools">
       <button class="tb-btn icon-only" id="btn-undo" title="Undo (Ctrl+Z)">
         <span class="tool-icon">
           <svg viewBox="0 0 16 16"><path d="M4 7.5A5 5 0 1 1 6 12"/><polyline points="1.5 5 4 7.5 6.5 5"/></svg>
@@ -37,7 +37,7 @@
     <div class="tb-sep"></div>
 
     <!-- Drawing tools -->
-    <div class="tb-group">
+    <div class="tb-group" id="pen-tools">
       <button class="tb-btn icon-only active" id="btn-pen" title="Pen (B)">
         <span class="tool-icon">
           <svg viewBox="0 0 16 16"><path d="M10.5 2L14 5.5 5.5 14H2v-3.5Z"/><line x1="8" y1="4" x2="12" y2="8"/></svg>
@@ -140,7 +140,16 @@
   <!-- ── Main area ──────────────────────────────────────────────────────── -->
   <div id="main">
 
+    <!-- Sidebar: Investigations + Notebooks -->
     <div id="sidebar">
+      <div class="sidebar-section-header" id="inv-section-header">
+        <span>Investigations</span>
+        <button id="add-investigation-btn" title="New investigation">+</button>
+      </div>
+      <div id="investigation-list"></div>
+
+      <div class="sidebar-divider"></div>
+
       <div id="sidebar-header">
         Notebooks
         <button id="add-notebook-btn" title="New notebook">+</button>
@@ -148,6 +157,29 @@
       <div id="notebook-list"></div>
     </div>
 
+    <!-- Mindmap panel (shown when investigation is active) -->
+    <div id="mindmap-panel" style="display:none">
+      <div id="mindmap-toolbar">
+        <span class="mm-tb-label">Add:</span>
+        <button class="mm-add-btn" data-type="person">👤 Person</button>
+        <button class="mm-add-btn" data-type="org">🏢 Org</button>
+        <button class="mm-add-btn" data-type="domain">🌐 Domain</button>
+        <button class="mm-add-btn" data-type="ip">🖥️ IP</button>
+        <button class="mm-add-btn" data-type="email">✉️ Email</button>
+        <button class="mm-add-btn" data-type="username">👾 Username</button>
+        <div class="mm-tb-sep"></div>
+        <button class="mm-ctrl-btn" id="mm-btn-layout" title="Auto-layout">Layout</button>
+        <button class="mm-ctrl-btn" id="mm-btn-fit" title="Fit to view">Fit</button>
+      </div>
+      <div id="mindmap-graph"></div>
+      <div id="mindmap-detail" style="display:none"></div>
+      <div id="mindmap-osint-panel" style="display:none"></div>
+    </div>
+
+    <!-- Splitter between mindmap and canvas -->
+    <div id="mindmap-splitter" style="display:none"></div>
+
+    <!-- Canvas -->
     <div id="canvas-container">
       <canvas id="canvas-committed"></canvas>
       <canvas id="canvas-active"></canvas>
@@ -156,6 +188,9 @@
 
   </div>
 </div>
+
+<!-- ── Context menu ────────────────────────────────────────────────────── -->
+<div id="mindmap-context-menu"></div>
 
 <!-- ── Color Picker Popup ──────────────────────────────────────────────── -->
 <div id="color-picker-popup">
@@ -178,6 +213,7 @@
 </div>
 
 <script src="/lib/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
 <script type="module" src="/js/app.js"></script>
 </body>
 </html>
