@@ -124,17 +124,21 @@ export class EmbedManager {
     el.style.top = embed.y + 'px';
     el.style.width = embed.width + 'px';
 
-    const closeBtn = _makeClose(() => this.engine.removeEmbed(embed.id));
-
     if (embed.type === 'youtube') {
       el.classList.add('embed-video');
       el.style.height = embed.height + 'px';
+      const dragBar = _makeDragBar(() => this.engine.removeEmbed(embed.id));
+      // Override position:absolute from CSS — bar must be in the flex flow so it
+      // occupies a real row above the iframe with zero overlap.
+      dragBar.style.cssText = 'position:relative;top:auto;left:auto;right:auto;opacity:1;flex-shrink:0;border-radius:10px 10px 0 0;';
+      el.appendChild(dragBar);
       const iframe = document.createElement('iframe');
       iframe.src = `https://www.youtube.com/embed/${embed.videoId}?rel=0`;
       iframe.allowFullscreen = true;
       iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
-      iframe.style.cssText = 'width:100%;height:100%;border:none;border-radius:8px;';
+      iframe.style.cssText = 'flex:1;width:100%;border:none;border-radius:0 0 8px 8px;min-height:0;';
       el.appendChild(iframe);
+      this._makeDraggable(el, embed, dragBar);
     } else {
       el.classList.add('embed-link');
       el.style.height = 'auto';
@@ -143,7 +147,7 @@ export class EmbedManager {
 
       const rh = document.createElement('div');
       rh.className = 'embed-resize-handle';
-      rh.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#6366f1;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);';
+      rh.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#1cb065;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);';
       rh.addEventListener('pointerenter', () => { rh.style.opacity = '1'; });
       rh.addEventListener('pointerleave', () => { rh.style.opacity = '0.7'; });
       rh.addEventListener('pointerdown', e => {
@@ -171,10 +175,12 @@ export class EmbedManager {
         document.addEventListener('pointercancel', onEnd);
       });
       el.appendChild(rh);
+
+      const dragBar = _makeDragBar(() => this.engine.removeEmbed(embed.id));
+      el.appendChild(dragBar);
+      this._makeDraggable(el, embed);
     }
 
-    el.appendChild(closeBtn);
-    this._makeDraggable(el, embed);
     this.layer.appendChild(el);
     this.elements.set(embed.id, el);
   }
@@ -213,7 +219,7 @@ export class EmbedManager {
 
     // Resize handle — same pattern as link/image handles
     const rh = document.createElement('div');
-    rh.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#6366f1;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);touch-action:none;';
+    rh.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#1cb065;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);touch-action:none;';
     rh.addEventListener('pointerenter', () => { rh.style.opacity = '1'; });
     rh.addEventListener('pointerleave', () => { rh.style.opacity = '0.7'; });
     rh.addEventListener('pointerdown', e => {
@@ -293,6 +299,10 @@ export class EmbedManager {
       colorRow.appendChild(btn);
     }
     header.appendChild(colorRow);
+    const stickyDragIcon = document.createElement('span');
+    stickyDragIcon.className = 'embed-drag-handle';
+    stickyDragIcon.textContent = '⠿';
+    header.appendChild(stickyDragIcon);
     header.appendChild(_makeCloseSmall(() => this.engine.removeEmbed(embed.id)));
     el.appendChild(header);
 
@@ -484,7 +494,7 @@ export class EmbedManager {
     // Corner resize handle (bottom-right) — uses document-level listeners for reliability
     const resizeHandle = document.createElement('div');
     resizeHandle.className = 'embed-resize-handle';
-    resizeHandle.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#6366f1;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);';
+    resizeHandle.style.cssText = 'position:absolute;bottom:5px;right:5px;width:16px;height:16px;background:#1cb065;border-radius:3px;cursor:nwse-resize;pointer-events:all;opacity:0.7;z-index:9999;box-shadow:0 0 0 2px rgba(255,255,255,0.4),0 2px 6px rgba(0,0,0,0.7);';
     resizeHandle.addEventListener('pointerenter', () => { resizeHandle.style.opacity = '1'; });
     resizeHandle.addEventListener('pointerleave', () => { resizeHandle.style.opacity = '0.7'; });
 
@@ -521,8 +531,8 @@ export class EmbedManager {
     });
 
     el.appendChild(img);
-    el.appendChild(_makeClose(() => this.engine.removeEmbed(embed.id)));
     el.appendChild(resizeHandle);
+    el.appendChild(_makeDragBar(() => this.engine.removeEmbed(embed.id)));
     this._makeDraggable(el, embed);
     this.layer.appendChild(el);
     this.elements.set(embed.id, el);
@@ -552,8 +562,9 @@ export class EmbedManager {
   }
 
   // ─── Drag ────────────────────────────────────────────────────────────────
-  // handle defaults to el (whole-card drag for youtube/link).
-  // For text/sticky, pass the header element so the body stays typeable.
+  // handle defaults to el (whole-card drag for link/image).
+  // For text/sticky/code, pass the header so the body stays typeable.
+  // For youtube, pass the dragBar since the iframe blocks all other events.
 
   _makeDraggable(el, embed, handle = el) {
     let dragging = false, startX, startY, startEX, startEY, capturedId;
@@ -574,6 +585,7 @@ export class EmbedManager {
       startEX = embed.x;  startEY = embed.y;
       handle.setPointerCapture(e.pointerId);
       el.style.cursor = 'grabbing';
+      handle.style.cursor = 'grabbing';
     });
 
     handle.addEventListener('pointermove', e => {
@@ -590,6 +602,7 @@ export class EmbedManager {
       if (!dragging || e.pointerId !== capturedId) return;
       dragging = false;
       el.style.cursor = fullCard ? 'grab' : '';
+      handle.style.cursor = '';
       this.engine.updateEmbedPosition(embed.id, embed.x, embed.y);
     };
     handle.addEventListener('pointerup',     endDrag);
@@ -598,6 +611,17 @@ export class EmbedManager {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function _makeDragBar(onClose) {
+  const bar = document.createElement('div');
+  bar.className = 'embed-drag-bar';
+  const icon = document.createElement('span');
+  icon.className = 'embed-drag-bar-icon';
+  icon.textContent = '⠿ ⠿';
+  bar.appendChild(icon);
+  bar.appendChild(_makeCloseSmall(onClose));
+  return bar;
+}
 
 function _makeClose(onClick) {
   const btn = document.createElement('button');
